@@ -43,7 +43,7 @@ where
 
         let mut curr_time = start;
 
-        while curr_time < end {
+        while curr_time <= end {
             let dir = self.build_path(sat, prod, curr_time);
 
             if !Self::path_is_complete(&dir, prod)? {
