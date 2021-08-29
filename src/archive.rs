@@ -16,7 +16,7 @@ pub struct Archive<T: RemoteArchive> {
     remote: T,
 }
 
-const HOUR_COMPLET_FNAME: &str = "hour_complete.txt";
+const HOUR_COMPLETE_FNAME: &str = "hour_complete.txt";
 
 impl<RA> Archive<RA>
 where
@@ -38,26 +38,16 @@ where
         start: NaiveDateTime,
         end: NaiveDateTime,
     ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-        assert!(start < end);
-
-        let earliest = match sat {
-            Satellite::GOES16 => NaiveDate::from_ymd(2017, 12, 18).and_hms(17, 30, 0),
-            Satellite::GOES17 => NaiveDate::from_ymd(2018, 2, 12).and_hms(18, 0, 0),
-        };
-
-        let start = if start < earliest { earliest } else { start };
-
-        if end < start {
-            return Err(Box::new(GoesArchError::new("Invalid satellite dates.")));
-        }
+        let (start, end) = Self::validate_dates(sat, start, end)?;
 
         let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
 
         let mut to_ret = vec![];
 
-        let mut curr_time = start;
-
-        while curr_time <= end {
+        for curr_time in (0..)
+            .map(|i| end - Duration::hours(i))
+            .take_while(|time| *time >= start)
+        {
             let dir = self.build_path(sat, prod, curr_time);
 
             if !Self::path_is_complete(&dir, prod)? {
@@ -97,11 +87,33 @@ where
 
                 to_ret.push(pth);
             }
-
-            curr_time += Duration::hours(1);
         }
 
         Ok(to_ret)
+    }
+
+    fn validate_dates(
+        sat: Satellite,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+    ) -> Result<(NaiveDateTime, NaiveDateTime), GoesArchError> {
+
+        if end < start {
+            return Err(GoesArchError::new("Invalid satellite dates."));
+        }
+
+        let earliest = match sat {
+            Satellite::GOES16 => NaiveDate::from_ymd(2017, 12, 18).and_hms(17, 30, 0),
+            Satellite::GOES17 => NaiveDate::from_ymd(2018, 2, 12).and_hms(18, 0, 0),
+        };
+
+        let start = if start < earliest { earliest } else { start };
+
+        if end < start {
+            Err(GoesArchError::new("Invalid satellite dates."))
+        } else {
+            Ok((start, end))
+        }
     }
 
     fn path_is_complete(pth: &Path, prod: Product) -> Result<bool, Box<dyn Error>> {
@@ -110,7 +122,7 @@ where
             return Ok(false);
         }
 
-        let completion_marker = pth.join(HOUR_COMPLET_FNAME);
+        let completion_marker = pth.join(HOUR_COMPLETE_FNAME);
 
         if completion_marker.exists() {
             return Ok(true);
@@ -133,7 +145,7 @@ where
 
     fn mark_dir_as_complete(pth: &Path) -> Result<(), Box<dyn Error>> {
         let now = chrono::Utc::now().naive_utc();
-        let completion_marker = pth.join(HOUR_COMPLET_FNAME);
+        let completion_marker = pth.join(HOUR_COMPLETE_FNAME);
 
         let mut f = File::create(completion_marker)?;
         let complete_time = format!("{}\n", now);
