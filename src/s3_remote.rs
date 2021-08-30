@@ -3,6 +3,7 @@ use chrono::{naive::NaiveDateTime, Datelike, Timelike};
 use s3::{bucket::Bucket, creds::Credentials, region::Region};
 use std::error::Error;
 
+#[derive(Debug, Clone)]
 pub struct AmazonS3NoaaBigData {
     bucket_g16: Bucket,
     bucket_g17: Bucket,

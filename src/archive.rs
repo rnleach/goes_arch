@@ -3,6 +3,7 @@ use std::{
     fs::{create_dir_all, read_dir, File},
     io::Write,
     path::{Path, PathBuf},
+    thread::{self, JoinHandle},
 };
 
 use crate::{error::GoesArchError, product::Product, remote::RemoteArchive, satellite::Satellite};
@@ -10,6 +11,7 @@ use chrono::{
     naive::{NaiveDate, NaiveDateTime},
     Datelike, Duration, Timelike,
 };
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 pub struct Archive<T: RemoteArchive> {
     root: PathBuf,
@@ -18,9 +20,9 @@ pub struct Archive<T: RemoteArchive> {
 
 const HOUR_COMPLETE_FNAME: &str = "hour_complete.txt";
 
-impl<RA> Archive<RA>
+impl<RA: 'static> Archive<RA>
 where
-    RA: RemoteArchive,
+    RA: RemoteArchive + Clone + Send,
 {
     pub fn connect<P>(root_path: P, remote: RA) -> Self
     where
@@ -40,9 +42,11 @@ where
     ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
         let (start, end) = Self::validate_dates(sat, start, end)?;
 
-        let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
+        let (to_path_accumulator, paths_to_accumulate) = bounded(100);
+        let (to_downloader, needs_downloaded) = bounded(100);
 
-        let mut to_ret = vec![];
+        let accum_thrd = Self::start_accumulator_thread(paths_to_accumulate)?;
+        self.start_download_thread(sat, prod, needs_downloaded, to_path_accumulator.clone())?;
 
         for curr_time in (0..)
             .map(|i| end - Duration::hours(i))
@@ -50,46 +54,140 @@ where
         {
             let dir = self.build_path(sat, prod, curr_time);
 
-            if !Self::path_is_complete(&dir, prod)? {
-                let remote_filenames = self
-                    .remote
-                    .retrieve_remote_filenames(sat, prod, curr_time)?;
-
-                for remote_fname in &remote_filenames {
-                    let local_path = dir.join(remote_fname);
-                    if !local_path.exists() {
-                        let data: Vec<u8> =
-                            self.remote
-                                .retrieve_remote_file(sat, prod, curr_time, remote_fname)?;
-                        let mut f = File::create(local_path)?;
-                        f.write_all(&data)?;
-                    }
-                }
-
-                if curr_time < too_old_to_not_be_done {
-                    Self::mark_dir_as_complete(&dir)?;
-                }
-            }
-
-            for entry in read_dir(&dir)? {
-                let entry = entry?;
-                let pth = entry.path();
-
-                if pth.is_dir() {
-                    continue;
-                }
-
-                if let Some(ext) = pth.extension().map(|p| p.to_string_lossy()) {
-                    if ext != "nc" {
-                        continue;
-                    }
-                }
-
-                to_ret.push(pth);
+            if Self::path_is_complete(&dir, prod)? {
+                to_path_accumulator.send(dir)?;
+            } else {
+                to_downloader.send((dir, curr_time))?;
             }
         }
 
+        drop(to_downloader);
+        drop(to_path_accumulator);
+        let to_ret = accum_thrd.join().unwrap();
+
         Ok(to_ret)
+    }
+
+    fn start_download_thread(
+        &self,
+        sat: Satellite,
+        prod: Product,
+        local_dirs: Receiver<(PathBuf, NaiveDateTime)>,
+        to_accumulator: Sender<PathBuf>,
+    ) -> Result<(), Box<dyn Error>> {
+        let remote = self.remote.clone();
+
+        thread::Builder::new()
+            .name("Download Manager".to_owned())
+            .spawn(move || {
+                let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
+
+                for (dir, curr_time) in local_dirs {
+                    let remote_filenames =
+                        match remote.retrieve_remote_filenames(sat, prod, curr_time) {
+                            Ok(fnames) => fnames,
+                            Err(err) => {
+                                println!("Error retrieving remote file names: {}", err);
+                                continue;
+                            }
+                        };
+
+                    for remote_fname in &remote_filenames {
+                        let local_path = dir.join(remote_fname);
+                        if !local_path.exists() {
+                            let data: Vec<u8> = match remote.retrieve_remote_file(
+                                sat,
+                                prod,
+                                curr_time,
+                                remote_fname,
+                            ) {
+                                Ok(data) => data,
+                                Err(err) => {
+                                    println!("Error downloading data: {}\n{}", remote_fname, err);
+                                    continue;
+                                }
+                            };
+
+                            let mut f = match File::create(&local_path) {
+                                Ok(f) => f,
+                                Err(err) => {
+                                    println!("Error creating file: {:?}\n{}", local_path, err);
+                                    continue;
+                                }
+                            };
+
+                            match f.write_all(&data) {
+                                Ok(()) => {}
+                                Err(err) => {
+                                    println!(
+                                        "Error writing data to disk: {:?}\n{}",
+                                        local_path, err
+                                    )
+                                }
+                            };
+                        }
+                    }
+
+                    if curr_time < too_old_to_not_be_done {
+                        match Self::mark_dir_as_complete(&dir) {
+                            Ok(()) => {}
+                            Err(err) => println!("Error marking directory as complete: {}", err),
+                        };
+                    }
+
+                    to_accumulator.send(dir).unwrap();
+                }
+            })?;
+
+        Ok(())
+    }
+
+    fn start_accumulator_thread(
+        local_dirs: Receiver<PathBuf>,
+    ) -> Result<JoinHandle<Vec<PathBuf>>, Box<dyn Error>> {
+        let th = thread::Builder::new()
+            .name("PathBuf Accumulator".to_owned())
+            .spawn(|| {
+                let mut to_ret = vec![];
+
+                for dir in local_dirs {
+                    let read_dir = match read_dir(&dir) {
+                        Ok(read_dir) => read_dir,
+                        Err(err) => {
+                            println!("Error reading directory: {:?}\n{}", dir, err);
+                            continue;
+                        }
+                    };
+
+                    for entry_res in read_dir {
+                        let entry = match entry_res {
+                            Ok(entry) => entry,
+                            Err(err) => {
+                                println!("Error reading directory entry: {}", err);
+                                continue;
+                            }
+                        };
+
+                        let pth = entry.path();
+
+                        if pth.is_dir() {
+                            continue;
+                        }
+
+                        if let Some(ext) = pth.extension().map(|p| p.to_string_lossy()) {
+                            if ext != "nc" {
+                                continue;
+                            }
+                        }
+
+                        to_ret.push(pth);
+                    }
+                }
+
+                to_ret
+            })?;
+
+        Ok(th)
     }
 
     fn validate_dates(
@@ -97,7 +195,6 @@ where
         start: NaiveDateTime,
         end: NaiveDateTime,
     ) -> Result<(NaiveDateTime, NaiveDateTime), GoesArchError> {
-
         if end < start {
             return Err(GoesArchError::new("Invalid satellite dates."));
         }

@@ -7,5 +7,6 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4.19"
+crossbeam-channel = "^0.5.1"
 rust-s3 = {git = "https://github.com/durch/rust-s3/", tag="0.27.0-rc3", features = ["blocking"]}
 strum = { version = "0.21", features = ["derive"] }
