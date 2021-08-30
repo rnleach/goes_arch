@@ -3,7 +3,7 @@ use std::error::Error;
 use crate::{product::Product, satellite::Satellite};
 use chrono::naive::NaiveDateTime;
 
-pub trait RemoteArchive: Clone +Send {
+pub trait RemoteArchive: Clone + Send {
     fn connect() -> Result<Self, Box<dyn Error>>
     where
         Self: Sized;

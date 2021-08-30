@@ -75,11 +75,16 @@ where
         local_dirs: Receiver<(PathBuf, NaiveDateTime)>,
         to_accumulator: Sender<PathBuf>,
     ) -> Result<(), Box<dyn Error>> {
-        let remote = self.remote.clone();
+        const NUM_DOWNLOADERS: usize = 3;
 
-        thread::Builder::new()
-            .name("Download Manager".to_owned())
-            .spawn(move || {
+        let pool = threadpool::ThreadPool::with_name("Download Thread".to_owned(), NUM_DOWNLOADERS);
+
+        for _ in 0..NUM_DOWNLOADERS {
+            let remote = self.remote.clone();
+            let to_accumulator = to_accumulator.clone();
+            let local_dirs = local_dirs.clone();
+
+            pool.execute(move || {
                 let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
 
                 for (dir, curr_time) in local_dirs {
@@ -137,7 +142,8 @@ where
 
                     to_accumulator.send(dir).unwrap();
                 }
-            })?;
+            });
+        }
 
         Ok(())
     }
