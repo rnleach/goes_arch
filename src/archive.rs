@@ -88,6 +88,9 @@ where
                 let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
 
                 for (dir, curr_time) in local_dirs {
+                    let now = chrono::Utc::now().naive_utc();
+                    println!("{}  Downloading for directory: {:?}", now, &dir);
+
                     let remote_filenames =
                         match remote.retrieve_remote_filenames(sat, prod, curr_time) {
                             Ok(fnames) => fnames,
