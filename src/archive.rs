@@ -7,10 +7,7 @@ use std::{
 };
 
 use crate::{error::GoesArchError, product::Product, remote::RemoteArchive, satellite::Satellite};
-use chrono::{
-    naive::{NaiveDate, NaiveDateTime},
-    Datelike, Duration, Timelike,
-};
+use chrono::{naive::NaiveDateTime, Datelike, Duration, Timelike};
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 pub struct Archive<T: RemoteArchive> {
@@ -208,11 +205,7 @@ where
             return Err(GoesArchError::new("Invalid satellite dates."));
         }
 
-        let earliest = match sat {
-            Satellite::GOES16 => NaiveDate::from_ymd(2017, 12, 18).and_hms(17, 30, 0),
-            Satellite::GOES17 => NaiveDate::from_ymd(2018, 2, 12).and_hms(18, 0, 0),
-        };
-
+        let earliest = sat.earliest_operational_date();
         let start = if start < earliest { earliest } else { start };
 
         if end < start {
