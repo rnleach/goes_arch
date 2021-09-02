@@ -15,8 +15,6 @@ pub struct Archive<T: RemoteArchive> {
     remote: T,
 }
 
-const HOUR_COMPLETE_FNAME: &str = "hour_complete.txt";
-
 impl<RA: 'static> Archive<RA>
 where
     RA: RemoteArchive + Clone + Send,
@@ -41,9 +39,17 @@ where
 
         let (to_path_accumulator, paths_to_accumulate) = bounded(100);
         let (to_downloader, needs_downloaded) = bounded(100);
+        let (to_saver, from_downloader) = bounded(10);
 
         let accum_thrd = Self::start_accumulator_thread(paths_to_accumulate)?;
-        self.start_download_thread(sat, prod, needs_downloaded, to_path_accumulator.clone())?;
+        self.start_download_thread(
+            sat,
+            prod,
+            needs_downloaded,
+            to_saver,
+            to_path_accumulator.clone(),
+        )?;
+        let save_thrd = Self::start_save_thread(from_downloader, to_path_accumulator.clone())?;
 
         for curr_time in (0..)
             .map(|i| end - Duration::hours(i))
@@ -60,9 +66,49 @@ where
 
         drop(to_downloader);
         drop(to_path_accumulator);
+        save_thrd.join().unwrap();
         let to_ret = accum_thrd.join().unwrap();
 
         Ok(to_ret)
+    }
+}
+
+// Private methods and associated functions.
+
+const HOUR_COMPLETE_FNAME: &str = "hour_complete.txt";
+
+impl<RA: 'static> Archive<RA>
+where
+    RA: RemoteArchive + Clone + Send,
+{
+    fn start_save_thread(
+        file_paths: Receiver<(PathBuf, Vec<u8>)>,
+        to_accumulator: Sender<PathBuf>,
+    ) -> Result<JoinHandle<()>, Box<dyn Error>> {
+        let jh = thread::Builder::new()
+            .name("Save Thread".into())
+            .spawn(move || {
+                for (pth, data) in file_paths {
+                    let mut f = match File::create(&pth) {
+                        Ok(f) => f,
+                        Err(err) => {
+                            log::error!("Error creating file: {:?} : {}", pth, err);
+                            continue;
+                        }
+                    };
+
+                    match f.write_all(&data) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            log::error!("Error writing data to disk: {:?} : {}", pth, err);
+                        }
+                    };
+
+                    to_accumulator.send(pth).unwrap();
+                }
+            })?;
+
+        Ok(jh)
     }
 
     fn start_download_thread(
@@ -70,6 +116,7 @@ where
         sat: Satellite,
         prod: Product,
         local_dirs: Receiver<(PathBuf, NaiveDateTime)>,
+        to_data_saver: Sender<(PathBuf, Vec<u8>)>,
         to_accumulator: Sender<PathBuf>,
     ) -> Result<(), Box<dyn Error>> {
         const NUM_DOWNLOADERS: usize = 3;
@@ -78,12 +125,11 @@ where
 
         for _ in 0..NUM_DOWNLOADERS {
             let remote = self.remote.clone();
+            let to_data_saver = to_data_saver.clone();
             let to_accumulator = to_accumulator.clone();
             let local_dirs = local_dirs.clone();
 
             pool.execute(move || {
-                let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
-
                 for (dir, curr_time) in local_dirs {
                     log::info!("Downloading data for directory: {:?}", &dir);
 
@@ -98,7 +144,9 @@ where
 
                     for remote_fname in &remote_filenames {
                         let local_path = dir.join(remote_fname);
-                        if !local_path.exists() {
+                        if local_path.exists() {
+                            to_accumulator.send(local_path).unwrap();
+                        } else {
                             let data: Vec<u8> = match remote.retrieve_remote_file(
                                 sat,
                                 prod,
@@ -116,35 +164,9 @@ where
                                 }
                             };
 
-                            let mut f = match File::create(&local_path) {
-                                Ok(f) => f,
-                                Err(err) => {
-                                    log::error!("Error creating file: {:?} : {}", local_path, err);
-                                    continue;
-                                }
-                            };
-
-                            match f.write_all(&data) {
-                                Ok(()) => {}
-                                Err(err) => {
-                                    log::error!(
-                                        "Error writing data to disk: {:?} : {}",
-                                        local_path,
-                                        err
-                                    );
-                                }
-                            };
+                            to_data_saver.send((local_path, data)).unwrap();
                         }
                     }
-
-                    if curr_time < too_old_to_not_be_done {
-                        match Self::mark_dir_as_complete(&dir) {
-                            Ok(()) => {}
-                            Err(err) => log::error!("Error marking directory as complete: {}", err),
-                        };
-                    }
-
-                    to_accumulator.send(dir).unwrap();
                 }
             });
         }
@@ -153,43 +175,47 @@ where
     }
 
     fn start_accumulator_thread(
-        local_dirs: Receiver<PathBuf>,
+        paths: Receiver<PathBuf>,
     ) -> Result<JoinHandle<Vec<PathBuf>>, Box<dyn Error>> {
         let th = thread::Builder::new()
             .name("PathBuf Accumulator".to_owned())
             .spawn(|| {
                 let mut to_ret = vec![];
 
-                for dir in local_dirs {
-                    let read_dir = match read_dir(&dir) {
-                        Ok(read_dir) => read_dir,
-                        Err(err) => {
-                            log::error!("Error reading directory: {:?} : {}", dir, err);
-                            continue;
-                        }
-                    };
-
-                    for entry_res in read_dir {
-                        let entry = match entry_res {
-                            Ok(entry) => entry,
+                for pth in paths {
+                    if pth.is_dir() {
+                        let read_dir = match read_dir(&pth) {
+                            Ok(read_dir) => read_dir,
                             Err(err) => {
-                                log::error!("Error reading directory entry: {}", err);
+                                log::error!("Error reading directory: {:?} : {}", pth, err);
                                 continue;
                             }
                         };
 
-                        let pth = entry.path();
+                        for entry_res in read_dir {
+                            let entry = match entry_res {
+                                Ok(entry) => entry,
+                                Err(err) => {
+                                    log::error!("Error reading directory entry: {}", err);
+                                    continue;
+                                }
+                            };
 
-                        if pth.is_dir() {
-                            continue;
-                        }
+                            let file_pth = entry.path();
 
-                        if let Some(ext) = pth.extension().map(|p| p.to_string_lossy()) {
-                            if ext != "nc" {
+                            if file_pth.is_dir() {
                                 continue;
                             }
-                        }
 
+                            if let Some(ext) = file_pth.extension().map(|p| p.to_string_lossy()) {
+                                if ext != "nc" {
+                                    continue;
+                                }
+                            }
+
+                            to_ret.push(file_pth);
+                        }
+                    } else {
                         to_ret.push(pth);
                     }
                 }
