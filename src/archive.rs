@@ -26,7 +26,7 @@ where
         P: Into<PathBuf>,
     {
         let root = root_path.into();
-
+        log::info!("Connected to archive at: {:?}", &root);
         Self { root, remote }
     }
 
@@ -85,14 +85,13 @@ where
                 let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::days(1);
 
                 for (dir, curr_time) in local_dirs {
-                    let now = chrono::Utc::now().naive_utc();
-                    println!("{}  Downloading for directory: {:?}", now, &dir);
+                    log::info!("Downloading data for directory: {:?}", &dir);
 
                     let remote_filenames =
                         match remote.retrieve_remote_filenames(sat, prod, curr_time) {
                             Ok(fnames) => fnames,
                             Err(err) => {
-                                println!("Error retrieving remote file names: {}", err);
+                                log::error!("Error retreiving remote file names: {}", err);
                                 continue;
                             }
                         };
@@ -108,7 +107,11 @@ where
                             ) {
                                 Ok(data) => data,
                                 Err(err) => {
-                                    println!("Error downloading data: {}\n{}", remote_fname, err);
+                                    log::error!(
+                                        "Error downloading data: {} : {}",
+                                        remote_fname,
+                                        err
+                                    );
                                     continue;
                                 }
                             };
@@ -116,7 +119,7 @@ where
                             let mut f = match File::create(&local_path) {
                                 Ok(f) => f,
                                 Err(err) => {
-                                    println!("Error creating file: {:?}\n{}", local_path, err);
+                                    log::error!("Error creating file: {:?} : {}", local_path, err);
                                     continue;
                                 }
                             };
@@ -124,10 +127,11 @@ where
                             match f.write_all(&data) {
                                 Ok(()) => {}
                                 Err(err) => {
-                                    println!(
-                                        "Error writing data to disk: {:?}\n{}",
-                                        local_path, err
-                                    )
+                                    log::error!(
+                                        "Error writing data to disk: {:?} : {}",
+                                        local_path,
+                                        err
+                                    );
                                 }
                             };
                         }
@@ -136,7 +140,7 @@ where
                     if curr_time < too_old_to_not_be_done {
                         match Self::mark_dir_as_complete(&dir) {
                             Ok(()) => {}
-                            Err(err) => println!("Error marking directory as complete: {}", err),
+                            Err(err) => log::error!("Error marking directory as complete: {}", err),
                         };
                     }
 
@@ -160,7 +164,7 @@ where
                     let read_dir = match read_dir(&dir) {
                         Ok(read_dir) => read_dir,
                         Err(err) => {
-                            println!("Error reading directory: {:?}\n{}", dir, err);
+                            log::error!("Error reading directory: {:?} : {}", dir, err);
                             continue;
                         }
                     };
@@ -169,7 +173,7 @@ where
                         let entry = match entry_res {
                             Ok(entry) => entry,
                             Err(err) => {
-                                println!("Error reading directory entry: {}", err);
+                                log::error!("Error reading directory entry: {}", err);
                                 continue;
                             }
                         };
@@ -201,17 +205,25 @@ where
         start: NaiveDateTime,
         end: NaiveDateTime,
     ) -> Result<(NaiveDateTime, NaiveDateTime), GoesArchError> {
+        log::info!("start - {} end {}", start, end);
+
         if end < start {
+            log::error!("End before start: start - {} end - {}", start, end);
             return Err(GoesArchError::new("Invalid satellite dates."));
         }
 
         let earliest = sat.earliest_operational_date();
-        let start = if start < earliest { earliest } else { start };
+        let valid_start = if start < earliest { earliest } else { start };
 
-        if end < start {
+        if valid_start != start {
+            log::warn!("valid start time was adjusted to start - {}", valid_start);
+        }
+
+        if end < valid_start {
+            log::error!("End before start: start - {} end - {}", valid_start, end);
             Err(GoesArchError::new("Invalid satellite dates."))
         } else {
-            Ok((start, end))
+            Ok((valid_start, end))
         }
     }
 
