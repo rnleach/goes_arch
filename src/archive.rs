@@ -104,6 +104,7 @@ where
                         }
                     };
 
+                    log::debug!("Saved {:?}", pth);
                     to_accumulator.send(pth).unwrap();
                 }
             })?;
@@ -145,6 +146,7 @@ where
                     for remote_fname in &remote_filenames {
                         let local_path = dir.join(remote_fname);
                         if local_path.exists() {
+                            log::debug!("Skipping download for {:?}", local_path);
                             to_accumulator.send(local_path).unwrap();
                         } else {
                             let data: Vec<u8> = match remote.retrieve_remote_file(
@@ -256,12 +258,14 @@ where
     fn path_is_complete(pth: &Path, prod: Product) -> Result<bool, Box<dyn Error>> {
         if !pth.exists() {
             create_dir_all(pth)?;
+            log::debug!("Creating path: {:?}", pth);
             return Ok(false);
         }
 
         let completion_marker = pth.join(HOUR_COMPLETE_FNAME);
 
         if completion_marker.exists() {
+            log::debug!("Completion marker found path: {:?}", pth);
             return Ok(true);
         }
 
@@ -273,10 +277,15 @@ where
             .count();
 
         if num_files >= prod.max_num_per_hour() as usize {
+            log::debug!(
+                "Enough files found in path to mark it as complete: {:?}",
+                pth
+            );
             Self::mark_dir_as_complete(pth)?;
             return Ok(true);
         }
 
+        log::debug!("Cannot confirm this path is complete: {:?}", pth);
         Ok(false)
     }
 
