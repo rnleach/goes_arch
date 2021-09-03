@@ -169,6 +169,11 @@ where
                             to_data_saver.send((local_path, data)).unwrap();
                         }
                     }
+
+                    let now = chrono::Utc::now().naive_utc();
+                    let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
+                    let complete_time = format!("{}\n", now).as_bytes().to_vec();
+                    to_data_saver.send((completion_marker, complete_time)).unwrap();
                 }
             });
         }
