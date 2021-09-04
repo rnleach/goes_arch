@@ -133,6 +133,7 @@ where
             let to_data_saver = to_data_saver.clone();
             let to_accumulator = to_accumulator.clone();
             let local_dirs = local_dirs.clone();
+            let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::hours(24);
 
             pool.execute(move || {
                 for (dir, curr_time) in local_dirs {
@@ -188,7 +189,7 @@ where
                         }
                     }
 
-                    if num_files >= prod.max_num_per_hour() {
+                    if num_files >= prod.max_num_per_hour() || curr_time < too_old_to_not_be_done {
                         let now = chrono::Utc::now().naive_utc();
                         let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
                         let complete_time = format!("{}\n", now).as_bytes().to_vec();
