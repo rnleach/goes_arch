@@ -157,11 +157,13 @@ where
                             }
                         };
 
+                    let mut num_files = 0;
                     for remote_fname in &remote_filenames {
                         let local_path = dir.join(remote_fname);
                         if local_path.exists() {
                             log::debug!("Skipping download for {:?}", local_path);
                             to_accumulator.send(local_path).unwrap();
+                            num_files += 1;
                         } else {
                             let data: Vec<u8> = match remote.retrieve_remote_file(
                                 sat,
@@ -181,16 +183,19 @@ where
                             };
 
                             to_data_saver.send((local_path, data)).unwrap();
+                            num_files += 1;
                             COMPLETED_DOWNLOADS.fetch_add(1, Ordering::SeqCst);
                         }
                     }
 
-                    let now = chrono::Utc::now().naive_utc();
-                    let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
-                    let complete_time = format!("{}\n", now).as_bytes().to_vec();
-                    to_data_saver
-                        .send((completion_marker, complete_time))
-                        .unwrap();
+                    if num_files >= prod.max_num_per_hour() {
+                        let now = chrono::Utc::now().naive_utc();
+                        let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
+                        let complete_time = format!("{}\n", now).as_bytes().to_vec();
+                        to_data_saver
+                            .send((completion_marker, complete_time))
+                            .unwrap();
+                    }
                 }
             });
         }
