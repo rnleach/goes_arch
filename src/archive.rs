@@ -3,6 +3,7 @@ use std::{
     fs::{create_dir_all, read_dir, File},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     thread::{self, JoinHandle},
 };
 
@@ -14,6 +15,9 @@ pub struct Archive<T: RemoteArchive> {
     root: PathBuf,
     remote: T,
 }
+
+const MAX_DOWNLOADS: usize = 2_000;
+static COMPLETED_DOWNLOADS: AtomicUsize = AtomicUsize::new(0);
 
 impl<RA: 'static> Archive<RA>
 where
@@ -132,7 +136,17 @@ where
 
             pool.execute(move || {
                 for (dir, curr_time) in local_dirs {
-                    log::info!("Downloading data for directory: {:?}", &dir);
+                    let count = COMPLETED_DOWNLOADS.load(Ordering::SeqCst);
+                    if count > MAX_DOWNLOADS {
+                        log::warn!("MAX_DOWNLOADS limit exceeded, skipping {:?}", &dir);
+                        continue;
+                    }
+
+                    log::info!(
+                        "Downloading directory: {:?} approx {} downloads left.",
+                        &dir,
+                        MAX_DOWNLOADS - count
+                    );
 
                     let remote_filenames =
                         match remote.retrieve_remote_filenames(sat, prod, curr_time) {
@@ -167,13 +181,16 @@ where
                             };
 
                             to_data_saver.send((local_path, data)).unwrap();
+                            COMPLETED_DOWNLOADS.fetch_add(1, Ordering::SeqCst);
                         }
                     }
 
                     let now = chrono::Utc::now().naive_utc();
                     let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
                     let complete_time = format!("{}\n", now).as_bytes().to_vec();
-                    to_data_saver.send((completion_marker, complete_time)).unwrap();
+                    to_data_saver
+                        .send((completion_marker, complete_time))
+                        .unwrap();
                 }
             });
         }
