@@ -13,7 +13,7 @@ pub enum Product {
 impl Product {
     pub fn max_num_per_hour(&self) -> i32 {
         match *self {
-            Product::FDCM => 60,
+            Product::FDCM => 120,
             Product::FDCC => 12,
             Product::FDCF => 6,
         }

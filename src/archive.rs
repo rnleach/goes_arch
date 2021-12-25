@@ -93,7 +93,11 @@ where
             .name("Save Thread".into())
             .spawn(move || {
                 for (pth, data) in file_paths {
-                    let mut f = match File::create(&pth) {
+                    let fname = pth.to_string_lossy().to_string();
+                    let zfname = fname.clone() + ".zip";
+                    let zpath: PathBuf = zfname.into();
+
+                    let f = match File::create(&zpath) {
                         Ok(f) => f,
                         Err(err) => {
                             log::error!("Error creating file: {:?} : {}", pth, err);
@@ -101,7 +105,15 @@ where
                         }
                     };
 
-                    match f.write_all(&data) {
+                    let mut zipf = zip::ZipWriter::new(f);
+
+                    match zipf.start_file(fname, zip::write::FileOptions::default()) {
+                        Ok(()) => {},
+                        Err(err) => log::error!("Error starting zip file: {:?}: {}", pth, err),
+                    }
+
+
+                    match zipf.write_all(&data) {
                         Ok(()) => {}
                         Err(err) => {
                             log::error!("Error writing data to disk: {:?} : {}", pth, err);
