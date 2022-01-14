@@ -313,7 +313,10 @@ where
         let num_files: usize = read_dir(&pth)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter_map(|pth| pth.extension().map(|ext| ext.to_string_lossy() == "nc"))
+            .filter_map(|pth| pth.extension().map(|ext| {
+                let ext = ext.to_string_lossy();
+                ext == "nc" || ext == "zip"
+            }))
             .filter(|ext_bool| *ext_bool)
             .count();
 
