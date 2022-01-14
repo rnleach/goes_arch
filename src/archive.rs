@@ -39,7 +39,7 @@ where
         start: NaiveDateTime,
         end: NaiveDateTime,
     ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-        let (start, end) = Self::validate_dates(sat, start, end)?;
+        let (start, end) = Self::validate_dates(sat, prod, start, end)?;
 
         let (to_path_accumulator, paths_to_accumulate) = bounded(100);
         let (to_downloader, needs_downloaded) = bounded(100);
@@ -258,6 +258,7 @@ where
 
     fn validate_dates(
         sat: Satellite,
+        prod: Product,
         start: NaiveDateTime,
         end: NaiveDateTime,
     ) -> Result<(NaiveDateTime, NaiveDateTime), GoesArchError> {
@@ -268,7 +269,7 @@ where
             return Err(GoesArchError::new("Invalid satellite dates."));
         }
 
-        let earliest = sat.earliest_operational_date();
+        let earliest = sat.earliest_operational_date(prod);
         let valid_start = if start < earliest { earliest } else { start };
 
         if valid_start != start {
