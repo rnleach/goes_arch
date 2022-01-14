@@ -1,6 +1,6 @@
 [package]
 name = "goes_arch"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 publish = false
 
@@ -11,6 +11,6 @@ chrono = "0.4.19"
 crossbeam-channel = "^0.5.1"
 log = {version = "^0.4.14", features=["max_level_debug", "release_max_level_debug", "std"]}
 rust-s3 = {version="0.28", features = ["blocking"]}
-strum = { version = "0.21", features = ["derive"] }
+strum = { version = "0.23", features = ["derive"] }
 threadpool = "^1.8.1"
 zip = "0.5"
