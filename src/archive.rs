@@ -108,10 +108,9 @@ where
                     let mut zipf = zip::ZipWriter::new(f);
 
                     match zipf.start_file(fname, zip::write::FileOptions::default()) {
-                        Ok(()) => {},
+                        Ok(()) => {}
                         Err(err) => log::error!("Error starting zip file: {:?}: {}", pth, err),
                     }
-
 
                     match zipf.write_all(&data) {
                         Ok(()) => {}
@@ -145,7 +144,6 @@ where
             let to_data_saver = to_data_saver.clone();
             let to_accumulator = to_accumulator.clone();
             let local_dirs = local_dirs.clone();
-            let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::hours(24);
 
             pool.execute(move || {
                 for (dir, curr_time) in local_dirs {
@@ -170,13 +168,11 @@ where
                             }
                         };
 
-                    let mut num_files = 0;
                     for remote_fname in &remote_filenames {
                         let local_path = dir.join(remote_fname);
                         if local_path.exists() {
                             log::debug!("Skipping download for {:?}", local_path);
                             to_accumulator.send(local_path).unwrap();
-                            num_files += 1;
                         } else {
                             let data: Vec<u8> = match remote.retrieve_remote_file(
                                 sat,
@@ -196,18 +192,8 @@ where
                             };
 
                             to_data_saver.send((local_path, data)).unwrap();
-                            num_files += 1;
                             COMPLETED_DOWNLOADS.fetch_add(1, Ordering::SeqCst);
                         }
-                    }
-
-                    if num_files >= prod.max_num_per_hour() || curr_time < too_old_to_not_be_done {
-                        let now = chrono::Utc::now().naive_utc();
-                        let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
-                        let complete_time = format!("{}\n", now).as_bytes().to_vec();
-                        to_data_saver
-                            .send((completion_marker, complete_time))
-                            .unwrap();
                     }
                 }
             });
@@ -313,10 +299,12 @@ where
         let num_files: usize = read_dir(&pth)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter_map(|pth| pth.extension().map(|ext| {
-                let ext = ext.to_string_lossy();
-                ext == "nc" || ext == "zip"
-            }))
+            .filter_map(|pth| {
+                pth.extension().map(|ext| {
+                    let ext = ext.to_string_lossy();
+                    ext == "nc" || ext == "zip"
+                })
+            })
             .filter(|ext_bool| *ext_bool)
             .count();
 
