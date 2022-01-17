@@ -92,34 +92,56 @@ where
             .name("Save Thread".into())
             .spawn(move || {
                 for (pth, data) in file_paths {
-                    let fname = pth.to_string_lossy().to_string();
-                    let zfname = fname.clone() + ".zip";
-                    let zpath: PathBuf = zfname.into();
+                    // If this is a marker file, don't bother compressing it as a zip.
+                    if let Some(true) = pth
+                        .file_name()
+                        .map(|p| p.to_string_lossy())
+                        .map(|p| p == HOUR_COMPLETE_FNAME)
+                    {
+                        let mut f = match File::create(&pth) {
+                            Ok(f) => f,
+                            Err(err) => {
+                                log::error!("Error creating file: {:?} : {}", pth, err);
+                                continue;
+                            }
+                        };
 
-                    let f = match File::create(&zpath) {
-                        Ok(f) => f,
-                        Err(err) => {
-                            log::error!("Error creating file: {:?} : {}", pth, err);
-                            continue;
+                        match f.write_all(&data) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                log::error!("Error writing data to disk: {:?} : {}", pth, err);
+                            }
+                        };
+                    } else {
+                        let fname = pth.to_string_lossy().to_string();
+                        let zfname = fname.clone() + ".zip";
+                        let zpath: PathBuf = zfname.into();
+
+                        let f = match File::create(&zpath) {
+                            Ok(f) => f,
+                            Err(err) => {
+                                log::error!("Error creating file: {:?} : {}", pth, err);
+                                continue;
+                            }
+                        };
+
+                        let mut zipf = zip::ZipWriter::new(f);
+
+                        match zipf.start_file(fname, zip::write::FileOptions::default()) {
+                            Ok(()) => {}
+                            Err(err) => log::error!("Error starting zip file: {:?}: {}", pth, err),
                         }
-                    };
 
-                    let mut zipf = zip::ZipWriter::new(f);
+                        match zipf.write_all(&data) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                log::error!("Error writing data to disk: {:?} : {}", pth, err);
+                            }
+                        };
 
-                    match zipf.start_file(fname, zip::write::FileOptions::default()) {
-                        Ok(()) => {}
-                        Err(err) => log::error!("Error starting zip file: {:?}: {}", pth, err),
+                        log::debug!("Saved {:?}", pth);
+                        to_accumulator.send(pth).unwrap();
                     }
-
-                    match zipf.write_all(&data) {
-                        Ok(()) => {}
-                        Err(err) => {
-                            log::error!("Error writing data to disk: {:?} : {}", pth, err);
-                        }
-                    };
-
-                    log::debug!("Saved {:?}", pth);
-                    to_accumulator.send(pth).unwrap();
                 }
             })?;
 
@@ -145,6 +167,7 @@ where
             let to_data_saver = to_data_saver.clone();
             let to_accumulator = to_accumulator.clone();
             let local_dirs = local_dirs.clone();
+            let too_old_to_not_be_done = chrono::Utc::now().naive_utc() - Duration::hours(24);
 
             pool.execute(move || {
                 for (dir, curr_time) in local_dirs {
@@ -169,11 +192,13 @@ where
                             }
                         };
 
+                    let mut num_files = 0;
                     for remote_fname in &remote_filenames {
                         let local_path = dir.join(remote_fname);
                         if local_path.exists() {
                             log::debug!("Skipping download for {:?}", local_path);
                             to_accumulator.send(local_path).unwrap();
+                            num_files += 1;
                         } else {
                             let data: Vec<u8> = match remote.retrieve_remote_file(
                                 sat,
@@ -193,8 +218,18 @@ where
                             };
 
                             to_data_saver.send((local_path, data)).unwrap();
+                            num_files += 1;
                             COMPLETED_DOWNLOADS.fetch_add(1, Ordering::SeqCst);
                         }
+                    }
+
+                    if num_files >= prod.max_num_per_hour() || curr_time < too_old_to_not_be_done {
+                        let now = chrono::Utc::now().naive_utc();
+                        let completion_marker = dir.join(HOUR_COMPLETE_FNAME);
+                        let complete_time = format!("{}\n", now).as_bytes().to_vec();
+                        to_data_saver
+                            .send((completion_marker, complete_time))
+                            .unwrap();
                     }
                 }
             });
