@@ -16,7 +16,6 @@ pub struct Archive<T: RemoteArchive> {
     remote: T,
 }
 
-const MAX_DOWNLOADS: usize = 4_000;
 static COMPLETED_DOWNLOADS: AtomicUsize = AtomicUsize::new(0);
 
 impl<RA: 'static> Archive<RA>
@@ -139,6 +138,8 @@ where
 
         let pool = threadpool::ThreadPool::with_name("Download Thread".to_owned(), NUM_DOWNLOADERS);
 
+        let num_max_downloads = self.remote.max_downloads();
+
         for _ in 0..NUM_DOWNLOADERS {
             let remote = self.remote.clone();
             let to_data_saver = to_data_saver.clone();
@@ -148,7 +149,7 @@ where
             pool.execute(move || {
                 for (dir, curr_time) in local_dirs {
                     let count = COMPLETED_DOWNLOADS.load(Ordering::SeqCst);
-                    if count > MAX_DOWNLOADS {
+                    if count > num_max_downloads {
                         log::warn!("MAX_DOWNLOADS limit exceeded, skipping {:?}", &dir);
                         continue;
                     }
@@ -156,7 +157,7 @@ where
                     log::info!(
                         "Downloading directory: {:?} approx {} downloads left.",
                         &dir,
-                        MAX_DOWNLOADS - count
+                        num_max_downloads - count
                     );
 
                     let remote_filenames =

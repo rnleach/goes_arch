@@ -7,6 +7,7 @@ use std::error::Error;
 pub struct AmazonS3NoaaBigData {
     bucket_g16: Bucket,
     bucket_g17: Bucket,
+    num_max_downloads: usize,
 }
 
 impl AmazonS3NoaaBigData {
@@ -35,7 +36,7 @@ impl AmazonS3NoaaBigData {
 }
 
 impl RemoteArchive for AmazonS3NoaaBigData {
-    fn connect() -> Result<Self, Box<dyn Error>>
+    fn connect(num_max_downloads: usize) -> Result<Self, Box<dyn Error>>
     where
         Self: Sized,
     {
@@ -59,6 +60,7 @@ impl RemoteArchive for AmazonS3NoaaBigData {
         Ok(AmazonS3NoaaBigData {
             bucket_g16,
             bucket_g17,
+            num_max_downloads,
         })
     }
 
@@ -104,5 +106,9 @@ impl RemoteArchive for AmazonS3NoaaBigData {
         }
 
         Ok(data)
+    }
+
+    fn max_downloads(&self) -> usize {
+        self.num_max_downloads
     }
 }

@@ -4,7 +4,7 @@ use crate::{product::Product, satellite::Satellite};
 use chrono::naive::NaiveDateTime;
 
 pub trait RemoteArchive: Clone + Send {
-    fn connect() -> Result<Self, Box<dyn Error>>
+    fn connect(max_downloads: usize) -> Result<Self, Box<dyn Error>>
     where
         Self: Sized;
 
@@ -22,4 +22,6 @@ pub trait RemoteArchive: Clone + Send {
         valid_hour: NaiveDateTime,
         remote_path: &str,
     ) -> Result<Vec<u8>, Box<dyn Error>>;
+
+    fn max_downloads(&self) -> usize;
 }
