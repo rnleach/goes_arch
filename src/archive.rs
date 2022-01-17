@@ -16,7 +16,7 @@ pub struct Archive<T: RemoteArchive> {
     remote: T,
 }
 
-const MAX_DOWNLOADS: usize = 2_000;
+const MAX_DOWNLOADS: usize = 4_000;
 static COMPLETED_DOWNLOADS: AtomicUsize = AtomicUsize::new(0);
 
 impl<RA: 'static> Archive<RA>
