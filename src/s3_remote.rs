@@ -7,6 +7,7 @@ use std::error::Error;
 pub struct AmazonS3NoaaBigData {
     bucket_g16: Bucket,
     bucket_g17: Bucket,
+    bucket_g18: Bucket,
     num_max_downloads: usize,
 }
 
@@ -31,6 +32,7 @@ impl AmazonS3NoaaBigData {
         match sat {
             Satellite::GOES16 => &self.bucket_g16,
             Satellite::GOES17 => &self.bucket_g17,
+            Satellite::GOES18 => &self.bucket_g18,
         }
     }
 }
@@ -42,6 +44,7 @@ impl RemoteArchive for AmazonS3NoaaBigData {
     {
         let region: Region = "us-east-1".parse()?;
         let credentials = Credentials::anonymous()?;
+        let bucket_str_g18 = "noaa-goes18";
         let bucket_str_g17 = "noaa-goes17";
         let bucket_str_g16 = "noaa-goes16";
 
@@ -52,14 +55,21 @@ impl RemoteArchive for AmazonS3NoaaBigData {
         };
 
         let bucket_g17 = {
+            let region = region.clone();
+            let credentials = credentials.clone();
+            Bucket::new(&bucket_str_g17, region, credentials)?
+        };
+
+        let bucket_g18 = {
             let region = region;
             let credentials = credentials;
-            Bucket::new(&bucket_str_g17, region, credentials)?
+            Bucket::new(&bucket_str_g18, region, credentials)?
         };
 
         Ok(AmazonS3NoaaBigData {
             bucket_g16,
             bucket_g17,
+            bucket_g18,
             num_max_downloads,
         })
     }
